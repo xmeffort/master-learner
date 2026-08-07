@@ -71,7 +71,7 @@ jobs:
           test -f source/android/settings.gradle.kts
           unzip -t master-learner-android.zip >/dev/null
 
-      - name: Apply AGP 9 compatibility migration
+      - name: Apply AGP 9 and compiler compatibility migration
         shell: bash
         run: |
           python3 - <<'PY'
@@ -121,6 +121,19 @@ jobs:
           if weight_changed != 6:
               raise SystemExit(f'Expected 6 obsolete Compose weight imports, changed {weight_changed}')
 
+          database = root / 'core' / 'database' / 'src' / 'main' / 'java' / 'com' / 'masterlearner' / 'core' / 'database' / 'AppDatabase.kt'
+          text = database.read_text()
+          replacements = {
+              'rows.map(::toSavedConcept)': 'rows.map { it.toSavedConcept() }',
+              'rows.map(::toReviewCard)': 'rows.map { it.toReviewCard() }',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'Expected database mapping expression was not found: {old}')
+              text = text.replace(old, new, 1)
+          database.write_text(text)
+          print('Replaced invalid unbound extension references with typed receiver lambdas in Room mappings')
+
           debug_manifest = root / 'app' / 'src' / 'debug' / 'AndroidManifest.xml'
           text = debug_manifest.read_text()
           expected = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    <application android:usesCleartextTraffic="true" />\n</manifest>'
@@ -134,6 +147,7 @@ jobs:
           grep -n '^hilt = "2.60.1"' source/android/gradle/libs.versions.toml
           grep -A4 'defaultConfig' source/android/core/network/build.gradle.kts
           ! grep -R '^import androidx.compose.foundation.layout.weight$' source/android --include='*.kt'
+          ! grep -R 'map(::toSavedConcept)\|map(::toReviewCard)' source/android/core/database --include='*.kt'
           grep -n 'tools:replace="android:usesCleartextTraffic"' source/android/app/src/debug/AndroidManifest.xml
           grep -n 'android:usesCleartextTraffic="false"' source/android/app/src/main/AndroidManifest.xml
 
