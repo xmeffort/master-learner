@@ -109,10 +109,19 @@ jobs:
               raise SystemExit('Expected core:network buildConfigField layout was not found')
           network.write_text(text.replace(old, new, 1))
           print('Moved buildConfigField into defaultConfig for AGP 9 DSL')
+
+          components = root / 'core' / 'designsystem' / 'src' / 'main' / 'java' / 'com' / 'masterlearner' / 'core' / 'designsystem' / 'Components.kt'
+          text = components.read_text()
+          old = 'import androidx.compose.foundation.layout.weight\n'
+          if old not in text:
+              raise SystemExit('Expected obsolete explicit Compose weight import was not found')
+          components.write_text(text.replace(old, '', 1))
+          print('Removed obsolete explicit Compose weight import; RowScope resolves Modifier.weight')
           PY
           ! grep -R "libs.plugins.kotlin.android" source/android --include='*.gradle.kts'
           grep -n '^hilt = "2.60.1"' source/android/gradle/libs.versions.toml
           grep -A4 'defaultConfig' source/android/core/network/build.gradle.kts
+          ! grep -n '^import androidx.compose.foundation.layout.weight$' source/android/core/designsystem/src/main/java/com/masterlearner/core/designsystem/Components.kt
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
