@@ -59,8 +59,7 @@ jobs:
               chunks.append(value)
               print(name, len(value))
 
-          combined = ''.join(chunks)
-          payload = base64.b64decode(combined, validate=True)
+          payload = base64.b64decode(''.join(chunks), validate=True)
           Path('master-learner-android.zip').write_bytes(payload)
           print('decoded bytes:', len(payload))
           print('zip sha256:', hashlib.sha256(payload).hexdigest())
@@ -78,7 +77,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           root = Path('source/android')
-          changed = 0
+
+          gradle_changed = 0
           for path in root.rglob('build.gradle.kts'):
               text = path.read_text()
               migrated = text.replace('    alias(libs.plugins.kotlin.android) apply false\n', '')
@@ -87,10 +87,10 @@ jobs:
               migrated = migrated.replace('; alias(libs.plugins.kotlin.android)', '')
               if migrated != text:
                   path.write_text(migrated)
-                  changed += 1
+                  gradle_changed += 1
                   print('AGP9 Kotlin migration:', path)
-          if changed != 14:
-              raise SystemExit(f'Expected 14 Gradle files to migrate, changed {changed}')
+          if gradle_changed != 14:
+              raise SystemExit(f'Expected 14 Gradle files to migrate, changed {gradle_changed}')
 
           catalog = root / 'gradle' / 'libs.versions.toml'
           text = catalog.read_text()
@@ -110,18 +110,21 @@ jobs:
           network.write_text(text.replace(old, new, 1))
           print('Moved buildConfigField into defaultConfig for AGP 9 DSL')
 
-          components = root / 'core' / 'designsystem' / 'src' / 'main' / 'java' / 'com' / 'masterlearner' / 'core' / 'designsystem' / 'Components.kt'
-          text = components.read_text()
-          old = 'import androidx.compose.foundation.layout.weight\n'
-          if old not in text:
-              raise SystemExit('Expected obsolete explicit Compose weight import was not found')
-          components.write_text(text.replace(old, '', 1))
-          print('Removed obsolete explicit Compose weight import; RowScope resolves Modifier.weight')
+          weight_import = 'import androidx.compose.foundation.layout.weight\n'
+          weight_changed = 0
+          for path in root.rglob('*.kt'):
+              text = path.read_text()
+              if weight_import in text:
+                  path.write_text(text.replace(weight_import, ''))
+                  weight_changed += 1
+                  print('Compose RowScope weight migration:', path)
+          if weight_changed != 6:
+              raise SystemExit(f'Expected 6 obsolete Compose weight imports, changed {weight_changed}')
           PY
           ! grep -R "libs.plugins.kotlin.android" source/android --include='*.gradle.kts'
           grep -n '^hilt = "2.60.1"' source/android/gradle/libs.versions.toml
           grep -A4 'defaultConfig' source/android/core/network/build.gradle.kts
-          ! grep -n '^import androidx.compose.foundation.layout.weight$' source/android/core/designsystem/src/main/java/com/masterlearner/core/designsystem/Components.kt
+          ! grep -R '^import androidx.compose.foundation.layout.weight$' source/android --include='*.kt'
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
