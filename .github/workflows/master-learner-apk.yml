@@ -19,13 +19,137 @@ jobs:
       - name: Reconstruct Android source
         shell: bash
         run: |
-          cat android-snapshot/part_*.b64 | base64 --decode > master-learner-android.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib
+
+          alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+          targets = {
+              'part_02.b64': 'fb842c230dab05c66beaab8d13de7742e2561d5b18c1480115fd51759691eaef',
+              'part_05.b64': '12530daa791d9819de1fbb5cf00837403f417cc5b2fd02e4315294e1c0035937',
+          }
+
+          def clean(name):
+              return ''.join(Path('android-snapshot', name).read_text().split())
+
+          def repair_one_missing_char(name, value, target):
+              if hashlib.sha256(value.encode()).hexdigest() == target:
+                  return value
+              if len(value) != 15999:
+                  raise RuntimeError(f'{name}: expected 15999 chars before repair, got {len(value)}')
+              for pos in range(len(value) + 1):
+                  left, right = value[:pos], value[pos:]
+                  for ch in alphabet:
+                      candidate = left + ch + right
+                      if hashlib.sha256(candidate.encode()).hexdigest() == target:
+                          print(f'{name}: repaired missing character at position {pos}: {ch}')
+                          return candidate
+              raise RuntimeError(f'{name}: deterministic repair failed')
+
+          ordered = [
+              'part_00.b64','part_01.b64','part_02.b64','part_03.b64','part_04.b64',
+              'part_05.b64','part_06.b64','part_07a.b64','part_07b.b64','part_07c.b64',
+              'part_07d.b64','part_08.b64'
+          ]
+          chunks = []
+          for name in ordered:
+              value = clean(name)
+              if name in targets:
+                  value = repair_one_missing_char(name, value, targets[name])
+              chunks.append(value)
+              print(name, len(value))
+
+          payload = base64.b64decode(''.join(chunks), validate=True)
+          Path('master-learner-android.zip').write_bytes(payload)
+          print('decoded bytes:', len(payload))
+          print('zip sha256:', hashlib.sha256(payload).hexdigest())
+          PY
           echo "dbccdf34a1afd576bdd8c615141d907a527bdd990686dcf3c0efbf49dcdd2597  master-learner-android.zip" | sha256sum --check
           rm -rf source
           mkdir source
           unzip -q master-learner-android.zip -d source
           test -f source/android/settings.gradle.kts
           unzip -t master-learner-android.zip >/dev/null
+
+      - name: Apply AGP 9 and compiler compatibility migration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('source/android')
+
+          gradle_changed = 0
+          for path in root.rglob('build.gradle.kts'):
+              text = path.read_text()
+              migrated = text.replace('    alias(libs.plugins.kotlin.android) apply false\n', '')
+              migrated = migrated.replace('    alias(libs.plugins.kotlin.android)\n', '')
+              migrated = migrated.replace('alias(libs.plugins.kotlin.android); ', '')
+              migrated = migrated.replace('; alias(libs.plugins.kotlin.android)', '')
+              if migrated != text:
+                  path.write_text(migrated)
+                  gradle_changed += 1
+                  print('AGP9 Kotlin migration:', path)
+          if gradle_changed != 14:
+              raise SystemExit(f'Expected 14 Gradle files to migrate, changed {gradle_changed}')
+
+          catalog = root / 'gradle' / 'libs.versions.toml'
+          text = catalog.read_text()
+          old = 'hilt = "2.57.1"'
+          new = 'hilt = "2.60.1"'
+          if old not in text:
+              raise SystemExit('Expected Hilt 2.57.1 pin was not found')
+          catalog.write_text(text.replace(old, new, 1))
+          print('Hilt upgraded to 2.60.1 for AGP 9 support')
+
+          network = root / 'core' / 'network' / 'build.gradle.kts'
+          text = network.read_text()
+          old = '    defaultConfig { minSdk = 26 }\n    buildFeatures { buildConfig = true }\n    buildConfigField("String", "API_BASE_URL", "\\\"${apiBaseUrl.get()}\\\"")'
+          new = '    defaultConfig {\n        minSdk = 26\n        buildConfigField("String", "API_BASE_URL", "\\\"${apiBaseUrl.get()}\\\"")\n    }\n    buildFeatures { buildConfig = true }'
+          if old not in text:
+              raise SystemExit('Expected core:network buildConfigField layout was not found')
+          network.write_text(text.replace(old, new, 1))
+          print('Moved buildConfigField into defaultConfig for AGP 9 DSL')
+
+          weight_import = 'import androidx.compose.foundation.layout.weight\n'
+          weight_changed = 0
+          for path in root.rglob('*.kt'):
+              text = path.read_text()
+              if weight_import in text:
+                  path.write_text(text.replace(weight_import, ''))
+                  weight_changed += 1
+                  print('Compose RowScope weight migration:', path)
+          if weight_changed != 6:
+              raise SystemExit(f'Expected 6 obsolete Compose weight imports, changed {weight_changed}')
+
+          database = root / 'core' / 'database' / 'src' / 'main' / 'java' / 'com' / 'masterlearner' / 'core' / 'database' / 'AppDatabase.kt'
+          text = database.read_text()
+          replacements = {
+              'rows.map(::toSavedConcept)': 'rows.map { it.toSavedConcept() }',
+              'rows.map(::toReviewCard)': 'rows.map { it.toReviewCard() }',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'Expected database mapping expression was not found: {old}')
+              text = text.replace(old, new, 1)
+          database.write_text(text)
+          print('Replaced invalid unbound extension references with typed receiver lambdas in Room mappings')
+
+          debug_manifest = root / 'app' / 'src' / 'debug' / 'AndroidManifest.xml'
+          text = debug_manifest.read_text()
+          expected = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    <application android:usesCleartextTraffic="true" />\n</manifest>'
+          replacement = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n    xmlns:tools="http://schemas.android.com/tools">\n    <application\n        android:usesCleartextTraffic="true"\n        tools:replace="android:usesCleartextTraffic" />\n</manifest>'
+          if expected not in text:
+              raise SystemExit('Expected debug manifest cleartext override layout was not found')
+          debug_manifest.write_text(text.replace(expected, replacement, 1))
+          print('Added debug-only manifest override for local cleartext backend; production remains false')
+          PY
+          ! grep -R "libs.plugins.kotlin.android" source/android --include='*.gradle.kts'
+          grep -n '^hilt = "2.60.1"' source/android/gradle/libs.versions.toml
+          grep -A4 'defaultConfig' source/android/core/network/build.gradle.kts
+          ! grep -R '^import androidx.compose.foundation.layout.weight$' source/android --include='*.kt'
+          ! grep -R 'map(::toSavedConcept)\|map(::toReviewCard)' source/android/core/database --include='*.kt'
+          grep -n 'tools:replace="android:usesCleartextTraffic"' source/android/app/src/debug/AndroidManifest.xml
+          grep -n 'android:usesCleartextTraffic="false"' source/android/app/src/main/AndroidManifest.xml
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -38,7 +162,7 @@ jobs:
 
       - name: Install Android 36 SDK
         shell: bash
-        run: yes | sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
