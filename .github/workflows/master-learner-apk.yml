@@ -21,23 +21,49 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import base64, re, sys
-          parts = sorted(Path('android-snapshot').glob('part_*.b64'))
-          print('parts:', [(p.name, p.stat().st_size) for p in parts])
-          combined = ''
-          for p in parts:
-              raw = p.read_text()
-              cleaned = ''.join(raw.split())
-              bad = sorted(set(re.sub(r'[A-Za-z0-9+/=]', '', cleaned)))
-              print(f'{p.name}: chars={len(cleaned)} mod4={len(cleaned)%4} bad={bad!r}')
-              combined += cleaned
-          try:
-              payload = base64.b64decode(combined, validate=True)
-          except Exception as e:
-              print('BASE64_VALIDATION_FAILED:', repr(e))
-              sys.exit(3)
+          import base64, hashlib
+
+          alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+          targets = {
+              'part_02.b64': 'fb842c230dab05c66beaab8d13de7742e2561d5b18c1480115fd51759691eaef',
+              'part_05.b64': '12530daa791d9819de1fbb5cf00837403f417cc5b2fd02e4315294e1c0035937',
+          }
+
+          def clean(name):
+              return ''.join(Path('android-snapshot', name).read_text().split())
+
+          def repair_one_missing_char(name, value, target):
+              if hashlib.sha256(value.encode()).hexdigest() == target:
+                  return value
+              if len(value) != 15999:
+                  raise RuntimeError(f'{name}: expected 15999 chars before repair, got {len(value)}')
+              for pos in range(len(value) + 1):
+                  left, right = value[:pos], value[pos:]
+                  for ch in alphabet:
+                      candidate = left + ch + right
+                      if hashlib.sha256(candidate.encode()).hexdigest() == target:
+                          print(f'{name}: repaired missing character at position {pos}: {ch}')
+                          return candidate
+              raise RuntimeError(f'{name}: deterministic repair failed')
+
+          ordered = [
+              'part_00.b64','part_01.b64','part_02.b64','part_03.b64','part_04.b64',
+              'part_05.b64','part_06.b64','part_07a.b64','part_07b.b64','part_07c.b64',
+              'part_07d.b64','part_08.b64'
+          ]
+          chunks = []
+          for name in ordered:
+              value = clean(name)
+              if name in targets:
+                  value = repair_one_missing_char(name, value, targets[name])
+              chunks.append(value)
+              print(name, len(value))
+
+          combined = ''.join(chunks)
+          payload = base64.b64decode(combined, validate=True)
           Path('master-learner-android.zip').write_bytes(payload)
           print('decoded bytes:', len(payload))
+          print('zip sha256:', hashlib.sha256(payload).hexdigest())
           PY
           echo "dbccdf34a1afd576bdd8c615141d907a527bdd990686dcf3c0efbf49dcdd2597  master-learner-android.zip" | sha256sum --check
           rm -rf source
