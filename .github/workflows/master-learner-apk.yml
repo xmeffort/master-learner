@@ -19,7 +19,26 @@ jobs:
       - name: Reconstruct Android source
         shell: bash
         run: |
-          cat android-snapshot/part_*.b64 | base64 --decode > master-learner-android.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, re, sys
+          parts = sorted(Path('android-snapshot').glob('part_*.b64'))
+          print('parts:', [(p.name, p.stat().st_size) for p in parts])
+          combined = ''
+          for p in parts:
+              raw = p.read_text()
+              cleaned = ''.join(raw.split())
+              bad = sorted(set(re.sub(r'[A-Za-z0-9+/=]', '', cleaned)))
+              print(f'{p.name}: chars={len(cleaned)} mod4={len(cleaned)%4} bad={bad!r}')
+              combined += cleaned
+          try:
+              payload = base64.b64decode(combined, validate=True)
+          except Exception as e:
+              print('BASE64_VALIDATION_FAILED:', repr(e))
+              sys.exit(3)
+          Path('master-learner-android.zip').write_bytes(payload)
+          print('decoded bytes:', len(payload))
+          PY
           echo "dbccdf34a1afd576bdd8c615141d907a527bdd990686dcf3c0efbf49dcdd2597  master-learner-android.zip" | sha256sum --check
           rm -rf source
           mkdir source
