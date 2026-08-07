@@ -120,11 +120,22 @@ jobs:
                   print('Compose RowScope weight migration:', path)
           if weight_changed != 6:
               raise SystemExit(f'Expected 6 obsolete Compose weight imports, changed {weight_changed}')
+
+          debug_manifest = root / 'app' / 'src' / 'debug' / 'AndroidManifest.xml'
+          text = debug_manifest.read_text()
+          expected = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    <application android:usesCleartextTraffic="true" />\n</manifest>'
+          replacement = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n    xmlns:tools="http://schemas.android.com/tools">\n    <application\n        android:usesCleartextTraffic="true"\n        tools:replace="android:usesCleartextTraffic" />\n</manifest>'
+          if expected not in text:
+              raise SystemExit('Expected debug manifest cleartext override layout was not found')
+          debug_manifest.write_text(text.replace(expected, replacement, 1))
+          print('Added debug-only manifest override for local cleartext backend; production remains false')
           PY
           ! grep -R "libs.plugins.kotlin.android" source/android --include='*.gradle.kts'
           grep -n '^hilt = "2.60.1"' source/android/gradle/libs.versions.toml
           grep -A4 'defaultConfig' source/android/core/network/build.gradle.kts
           ! grep -R '^import androidx.compose.foundation.layout.weight$' source/android --include='*.kt'
+          grep -n 'tools:replace="android:usesCleartextTraffic"' source/android/app/src/debug/AndroidManifest.xml
+          grep -n 'android:usesCleartextTraffic="false"' source/android/app/src/main/AndroidManifest.xml
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
