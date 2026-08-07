@@ -1,0 +1,65 @@
+name: master-learner-apk
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct Android source
+        shell: bash
+        run: |
+          cat android-snapshot/part_*.b64 | base64 --decode > master-learner-android.zip
+          echo "dbccdf34a1afd576bdd8c615141d907a527bdd990686dcf3c0efbf49dcdd2597  master-learner-android.zip" | sha256sum --check
+          rm -rf source
+          mkdir source
+          unzip -q master-learner-android.zip -d source
+          test -f source/android/settings.gradle.kts
+          unzip -t master-learner-android.zip >/dev/null
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 SDK
+        shell: bash
+        run: yes | sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Run tests and build debug APK
+        working-directory: source/android
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          test -f source/android/app/build/outputs/apk/debug/app-debug.apk
+          cp source/android/app/build/outputs/apk/debug/app-debug.apk master-learner-0.3.0-adaptive-debug.apk
+          sha256sum master-learner-0.3.0-adaptive-debug.apk
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-debug-apk
+          path: master-learner-0.3.0-adaptive-debug.apk
+          if-no-files-found: error
+          retention-days: 14
