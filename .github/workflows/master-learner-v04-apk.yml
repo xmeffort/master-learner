@@ -22,7 +22,28 @@ jobs:
       - name: Reconstruct 0.4 Android source
         shell: bash
         run: |
-          cat android-snapshot-v04/part_*.b64 | tr -d '\n\r ' | base64 --decode > master-learner-v04.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, string
+          files = sorted(Path('android-snapshot-v04').glob('part_*.b64'))
+          allowed = set(string.ascii_letters + string.digits + '+/=')
+          chunks=[]
+          print('snapshot chunks:')
+          for p in files:
+              raw=''.join(p.read_text().split())
+              bad=[(i,c) for i,c in enumerate(raw) if c not in allowed]
+              print(p.name, 'len=', len(raw), 'sha256=', hashlib.sha256(raw.encode()).hexdigest(), 'bad=', bad[:5])
+              if bad:
+                  raise SystemExit(f'{p}: invalid characters')
+              chunks.append(raw)
+          joined=''.join(chunks)
+          print('joined length:', len(joined), 'mod4:', len(joined)%4)
+          print('padding positions:', [i for i,c in enumerate(joined) if c=='='][:10])
+          payload=base64.b64decode(joined, validate=True)
+          Path('master-learner-v04.zip').write_bytes(payload)
+          print('decoded bytes:', len(payload))
+          print('zip sha256:', hashlib.sha256(payload).hexdigest())
+          PY
           echo "e0d817db790b24695476d217671a958129674cb52514220e02acffe802bf97ec  master-learner-v04.zip" | sha256sum --check
           rm -rf source
           mkdir source
