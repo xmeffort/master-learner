@@ -73,14 +73,15 @@ jobs:
           grep -n 'versionName = "0.5.0-adaptive-discovery"' source/android/app/build.gradle.kts
           grep -n 'versionCode = 5' source/android/app/build.gradle.kts
 
-      - name: Apply Compose typography source migration
+      - name: Apply verified 0.5 source migrations
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('source/android/core/designsystem/src/main/java/com/masterlearner/core/designsystem/MasterLearnerTheme.kt')
-          text = path.read_text()
-          replacements = {
+
+          theme = Path('source/android/core/designsystem/src/main/java/com/masterlearner/core/designsystem/MasterLearnerTheme.kt')
+          text = theme.read_text()
+          typography = {
               'TextStyle(FontWeight.SemiBold, 42.sp, 46.sp, letterSpacing = (-0.9).sp)': 'TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 42.sp, lineHeight = 46.sp, letterSpacing = (-0.9).sp)',
               'TextStyle(FontWeight.SemiBold, 34.sp, 39.sp, letterSpacing = (-0.65).sp)': 'TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 34.sp, lineHeight = 39.sp, letterSpacing = (-0.65).sp)',
               'TextStyle(FontWeight.SemiBold, 28.sp, 34.sp, letterSpacing = (-0.4).sp)': 'TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = (-0.4).sp)',
@@ -95,14 +96,21 @@ jobs:
               'TextStyle(FontWeight.Medium, 12.sp, 16.sp, letterSpacing = 0.12.sp)': 'TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.12.sp)',
               'TextStyle(FontWeight.Bold, 10.sp, 14.sp, letterSpacing = 1.05.sp)': 'TextStyle(fontWeight = FontWeight.Bold, fontSize = 10.sp, lineHeight = 14.sp, letterSpacing = 1.05.sp)',
           }
-          changed = 0
-          for old, new in replacements.items():
+          for old, new in typography.items():
               if old not in text:
                   raise SystemExit(f'Expected typography expression missing: {old}')
               text = text.replace(old, new, 1)
-              changed += 1
-          path.write_text(text)
-          print('Named-parameter TextStyle migrations:', changed)
+          theme.write_text(text)
+          print('Named-parameter TextStyle migrations:', len(typography))
+
+          lesson = Path('source/android/feature/lesson/src/main/java/com/masterlearner/feature/lesson/LessonScreen.kt')
+          text = lesson.read_text()
+          old = '                        if (s.problem.secondaryAction != null) MasterSecondaryButton(s.problem.secondaryAction, onBack, Modifier.weight(1f))'
+          new = '                        s.problem.secondaryAction?.let { secondaryAction ->\n                            MasterSecondaryButton(secondaryAction, onBack, Modifier.weight(1f))\n                        }'
+          if old not in text:
+              raise SystemExit('Expected nullable secondaryAction expression missing')
+          lesson.write_text(text.replace(old, new, 1))
+          print('Bound nullable secondaryAction before cross-module Compose call')
           PY
 
       - name: Verify exact 0.5 source tree
@@ -120,7 +128,7 @@ jobs:
               h.update(p.read_bytes())
               h.update(b'\0')
           digest = h.hexdigest()
-          expected = 'd614921544d7bec2bc8d7921f1258a54eeab9d023730537b79c630d2b7a52528'
+          expected = '6f543b35de99e5ed546bff758adcd737409608966098e8f6d19eb8f1fdfe10b5'
           print('files:', len(files))
           print('0.5 tree SHA256:', digest)
           if digest != expected:
