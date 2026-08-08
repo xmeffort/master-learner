@@ -128,7 +128,17 @@ jobs:
             echo '=== LAST 80 LOG LINES ==='
             tail -n 80 /tmp/v05-gradle.log
           fi
+          cp /tmp/v05-gradle.log "$GITHUB_WORKSPACE/v05-gradle.log"
           exit "$status"
+
+      - name: Upload 0.5 build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-v05-build-diagnostics
+          path: v05-gradle.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Collect and verify APK
         shell: bash
