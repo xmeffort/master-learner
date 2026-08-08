@@ -35,12 +35,18 @@ jobs:
           ]
           chunks = []
           for name in ordered:
-              path = Path('android-snapshot-v04') / name
-              raw = ''.join(path.read_text().split())
+              if name == 'part_03.b64':
+                  raw = ''.join(
+                      ''.join((Path('ci/v05-baseline') / f'part_03_{i}.b64').read_text().split())
+                      for i in range(3)
+                  )
+              else:
+                  path = Path('android-snapshot-v04') / name
+                  raw = ''.join(path.read_text().split())
               if name == 'part_10b2.b64':
                   raw = raw[:2000]
               chunks.append(raw)
-              print(name, len(raw))
+              print(name, len(raw), hashlib.sha256(raw.encode()).hexdigest())
 
           joined = ''.join(chunks)
           if len(joined) != 139372:
