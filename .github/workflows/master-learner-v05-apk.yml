@@ -1,0 +1,131 @@
+name: master-learner-v05-apk
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-v05:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified 0.4 baseline
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib
+
+          ordered = [
+              'part_00.b64',
+              'part_01a.b64','part_01b.b64','part_01c.b64',
+              'part_02.b64','part_03.b64','part_04.b64','part_05.b64','part_06.b64',
+              'part_07a.b64','part_07b.b64','part_07c.b64',
+              'part_08a.b64','part_08b.b64','part_08c.b64',
+              'part_09a.b64','part_09b.b64','part_09c.b64',
+              'part_10a.b64','part_10b1a.b64','part_10b1b.b64','part_10b2.b64','part_10c.b64',
+              'part_11a.b64','part_11b.b64',
+          ]
+          chunks = []
+          for name in ordered:
+              path = Path('android-snapshot-v04') / name
+              raw = ''.join(path.read_text().split())
+              if name == 'part_10b2.b64':
+                  raw = raw[:2000]
+              chunks.append(raw)
+              print(name, len(raw))
+
+          joined = ''.join(chunks)
+          if len(joined) != 139372:
+              raise SystemExit(f'Unexpected 0.4 Base64 length {len(joined)} != 139372')
+          payload = base64.b64decode(joined, validate=True)
+          digest = hashlib.sha256(payload).hexdigest()
+          expected = 'e0d817db790b24695476d217671a958129674cb52514220e02acffe802bf97ec'
+          print('0.4 source SHA256:', digest)
+          if digest != expected:
+              raise SystemExit(f'0.4 source checksum mismatch: {digest}')
+          Path('/tmp/master-learner-v04.zip').write_bytes(payload)
+          PY
+          rm -rf source && mkdir source
+          unzip -q /tmp/master-learner-v04.zip -d source
+          unzip -t /tmp/master-learner-v04.zip >/dev/null
+          test -f source/android/settings.gradle.kts
+
+      - name: Verify and apply exact 0.5 patch
+        shell: bash
+        run: |
+          cat ci/v05-patch/part_00.b64 ci/v05-patch/part_01.b64 ci/v05-patch/part_02.b64 ci/v05-patch/part_03.b64 ci/v05-patch/part_04.b64 | base64 -d > /tmp/master-learner-v05.patch.gz
+          echo '032a177547bba51848cc3f2298c1a553a51c8e86212ecd7305a3297e7dc6ddbe  /tmp/master-learner-v05.patch.gz' | sha256sum --check
+          gzip -dc /tmp/master-learner-v05.patch.gz > /tmp/master-learner-v05.patch
+          echo '14187217201cc3c2b2dc43363918fd02388ba3c81efbb0616d7b4a8a3f0547c5  /tmp/master-learner-v05.patch' | sha256sum --check
+          (cd source && patch -p1 < /tmp/master-learner-v05.patch)
+          grep -n 'versionName = "0.5.0-adaptive-discovery"' source/android/app/build.gradle.kts
+          grep -n 'versionCode = 5' source/android/app/build.gradle.kts
+
+      - name: Verify exact 0.5 source tree
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path('source/android')
+          h = hashlib.sha256()
+          files = sorted(p for p in root.rglob('*') if p.is_file())
+          for p in files:
+              h.update(p.relative_to(root).as_posix().encode())
+              h.update(b'\0')
+              h.update(p.read_bytes())
+              h.update(b'\0')
+          digest = h.hexdigest()
+          expected = '88c41c366d46eacab28ab7c5517e5d111b22e7a26673ec8ebed85538926f05cb'
+          print('files:', len(files))
+          print('0.5 tree SHA256:', digest)
+          if digest != expected:
+              raise SystemExit(f'0.5 source tree mismatch: {digest}')
+          PY
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 SDK
+        shell: bash
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Run tests and build 0.5 debug APK
+        working-directory: source/android
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Collect and verify APK
+        shell: bash
+        run: |
+          test -f source/android/app/build/outputs/apk/debug/app-debug.apk
+          cp source/android/app/build/outputs/apk/debug/app-debug.apk master-learner-0.5.0-adaptive-discovery-debug.apk
+          file master-learner-0.5.0-adaptive-discovery-debug.apk
+          sha256sum master-learner-0.5.0-adaptive-discovery-debug.apk
+          unzip -t master-learner-0.5.0-adaptive-discovery-debug.apk >/dev/null
+
+      - name: Upload installable 0.5 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-v05-debug-apk
+          path: master-learner-0.5.0-adaptive-discovery-debug.apk
+          if-no-files-found: error
+          retention-days: 14
