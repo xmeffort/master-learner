@@ -117,7 +117,18 @@ jobs:
 
       - name: Run tests and build 0.5 debug APK
         working-directory: source/android
-        run: gradle testDebugUnitTest assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set +e
+          gradle testDebugUnitTest assembleDebug --stacktrace > /tmp/v05-gradle.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo '=== FILTERED BUILD DIAGNOSTICS ==='
+            grep -E '(^e: |FAILURE:|What went wrong:|Execution failed for task|Compilation error|error:|FAILED)' /tmp/v05-gradle.log | tail -n 250 || true
+            echo '=== LAST 80 LOG LINES ==='
+            tail -n 80 /tmp/v05-gradle.log
+          fi
+          exit "$status"
 
       - name: Collect and verify APK
         shell: bash
