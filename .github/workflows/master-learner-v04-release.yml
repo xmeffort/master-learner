@@ -1,0 +1,143 @@
+name: master-learner-v04-release
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'android-snapshot-v04/**'
+      - 'ci/v04-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-v04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify exact 0.4 Android source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, string
+          files = sorted(Path('android-snapshot-v04').glob('part_*.b64'))
+          allowed = set(string.ascii_letters + string.digits + '+/=')
+          chunks=[]
+          for p in files:
+              raw=''.join(p.read_text().split())
+              bad=[(i,c) for i,c in enumerate(raw) if c not in allowed]
+              if bad:
+                  raise SystemExit(f'{p}: invalid Base64 characters {bad[:5]}')
+              # The connector overfilled this one temporary carrier. Its first
+              # 2K are the canonical a2+a3 shards; everything after that is ignored.
+              if p.name == 'part_01a2.b64':
+                  raw=raw[:2000]
+              chunks.append(raw)
+          joined=''.join(chunks)
+          print('joined Base64 length:', len(joined))
+          if len(joined) != 139372:
+              raise SystemExit(f'Unexpected Base64 length {len(joined)} != 139372')
+          payload=base64.b64decode(joined, validate=True)
+          digest=hashlib.sha256(payload).hexdigest()
+          print('decoded bytes:', len(payload))
+          print('source SHA256:', digest)
+          expected='e0d817db790b24695476d217671a958129674cb52514220e02acffe802bf97ec'
+          if digest != expected:
+              raise SystemExit(f'Source checksum mismatch: {digest}')
+          Path('master-learner-v04.zip').write_bytes(payload)
+          PY
+          rm -rf source && mkdir source
+          unzip -q master-learner-v04.zip -d source
+          unzip -t master-learner-v04.zip >/dev/null
+          test -f source/android/settings.gradle.kts
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 SDK
+        shell: bash
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Run tests and build 0.4 debug APK
+        id: gradle
+        working-directory: source/android
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle testDebugUnitTest assembleDebug --stacktrace 2>&1 | tee /tmp/v04-build.log
+
+      - name: Collect and verify APK
+        if: success()
+        shell: bash
+        run: |
+          test -f source/android/app/build/outputs/apk/debug/app-debug.apk
+          cp source/android/app/build/outputs/apk/debug/app-debug.apk master-learner-0.4.0-experience-debug.apk
+          file master-learner-0.4.0-experience-debug.apk
+          unzip -t master-learner-0.4.0-experience-debug.apk >/dev/null
+          sha256sum master-learner-0.4.0-experience-debug.apk | tee master-learner-0.4.0-experience-debug.apk.sha256
+
+      - name: Upload Actions artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-v04-experience-apk
+          path: |
+            master-learner-0.4.0-experience-debug.apk
+            master-learner-0.4.0-experience-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish stable development prerelease
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG='v0.4.0-experience-dev'
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target '${{ github.event.pull_request.head.sha }}' \
+              --title 'Master Learner 0.4 Experience Development APK' \
+              --notes 'Automated prerelease for physical-device UX validation. Not a production-signed build.' \
+              --prerelease
+          fi
+          gh release upload "$TAG" \
+            master-learner-0.4.0-experience-debug.apk \
+            master-learner-0.4.0-experience-debug.apk.sha256 \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Persist compiler diagnostics on PR branch
+        if: failure() && steps.gradle.outcome == 'failure'
+        shell: bash
+        run: |
+          git config user.name 'master-learner-ci'
+          git config user.email 'actions@users.noreply.github.com'
+          git fetch origin '${{ github.head_ref }}'
+          git checkout '${{ github.head_ref }}'
+          mkdir -p ci
+          {
+            echo 'Master Learner 0.4 last compiler failure'
+            echo '========================================'
+            tail -n 350 /tmp/v04-build.log
+          } > ci/v04-last-build-error.txt
+          git add ci/v04-last-build-error.txt
+          git commit -m 'ci: record 0.4 compiler diagnostics' || exit 0
+          git push origin HEAD:'${{ github.head_ref }}'
