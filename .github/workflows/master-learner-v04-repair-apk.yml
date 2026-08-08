@@ -1,0 +1,114 @@
+name: master-learner-v04-repair-apk
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'android-snapshot-v04/**'
+      - 'ci/v04-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-v04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify exact 0.4 Android source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, string
+
+          files = sorted(Path('android-snapshot-v04').glob('part_*.b64'))
+          allowed = set(string.ascii_letters + string.digits + '+/=')
+          chunks = []
+          print('snapshot chunks:')
+          for p in files:
+              raw = ''.join(p.read_text().split())
+              bad = [(i, c) for i, c in enumerate(raw) if c not in allowed]
+              if bad:
+                  raise SystemExit(f'{p}: invalid Base64 characters: {bad[:5]}')
+
+              # A connector clipped the original first 4K upload. The replacement
+              # part_01a2 accidentally contains the remaining canonical stream.
+              # Only its first 2K belong at this location (canonical shards a2+a3).
+              if p.name == 'part_01a2.b64':
+                  print(p.name, 'stored_len=', len(raw), 'using_len=2000')
+                  raw = raw[:2000]
+              else:
+                  print(p.name, 'len=', len(raw), 'sha256=', hashlib.sha256(raw.encode()).hexdigest())
+              chunks.append(raw)
+
+          joined = ''.join(chunks)
+          print('joined length:', len(joined), 'mod4:', len(joined) % 4)
+          if len(joined) != 139372:
+              raise SystemExit(f'Unexpected Base64 length: {len(joined)}')
+
+          payload = base64.b64decode(joined, validate=True)
+          digest = hashlib.sha256(payload).hexdigest()
+          print('decoded bytes:', len(payload))
+          print('zip sha256:', digest)
+          expected = 'e0d817db790b24695476d217671a958129674cb52514220e02acffe802bf97ec'
+          if digest != expected:
+              raise SystemExit(f'ZIP checksum mismatch: {digest}')
+          Path('master-learner-v04.zip').write_bytes(payload)
+          PY
+          rm -rf source
+          mkdir source
+          unzip -q master-learner-v04.zip -d source
+          unzip -t master-learner-v04.zip >/dev/null
+          test -f source/android/settings.gradle.kts
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 SDK
+        shell: bash
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Run tests and build 0.4 debug APK
+        working-directory: source/android
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Collect and verify APK
+        shell: bash
+        run: |
+          test -f source/android/app/build/outputs/apk/debug/app-debug.apk
+          cp source/android/app/build/outputs/apk/debug/app-debug.apk master-learner-0.4.0-experience-debug.apk
+          file master-learner-0.4.0-experience-debug.apk
+          unzip -t master-learner-0.4.0-experience-debug.apk >/dev/null
+          sha256sum master-learner-0.4.0-experience-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-v04-experience-apk
+          path: master-learner-0.4.0-experience-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload exact source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-v04-experience-source
+          path: master-learner-v04.zip
+          if-no-files-found: error
+          retention-days: 14
