@@ -67,10 +67,10 @@ jobs:
       - name: Verify and apply exact 0.5 patch
         shell: bash
         run: |
-          cat ci/v05-patch/part_00.b64 ci/v05-patch/part_01.b64 ci/v05-patch/part_02.b64 ci/v05-patch/part_03.b64 ci/v05-patch/part_04.b64 | base64 -d > /tmp/master-learner-v05.patch.gz
-          echo '032a177547bba51848cc3f2298c1a553a51c8e86212ecd7305a3297e7dc6ddbe  /tmp/master-learner-v05.patch.gz' | sha256sum --check
+          cat ci/v05-patch/part_00.b64 ci/v05-patch/part_01.b64 ci/v05-patch/part_02.b64 ci/v05-patch/part_03.b64 ci/v05-patch/part_04.b64 ci/v05-patch/part_05.b64 | base64 -d > /tmp/master-learner-v05.patch.gz
+          echo '6c0e509393405ea300857d56d965e3799bcc1d851502104818ea69b90eec41e1  /tmp/master-learner-v05.patch.gz' | sha256sum --check
           gzip -dc /tmp/master-learner-v05.patch.gz > /tmp/master-learner-v05.patch
-          echo '14187217201cc3c2b2dc43363918fd02388ba3c81efbb0616d7b4a8a3f0547c5  /tmp/master-learner-v05.patch' | sha256sum --check
+          echo '88f6d1c7023ee544fe3919eb104411d79ab444ebdd920dec7598953aacc88d08  /tmp/master-learner-v05.patch' | sha256sum --check
           (cd source && patch -p1 < /tmp/master-learner-v05.patch)
           grep -n 'versionName = "0.5.0-adaptive-discovery"' source/android/app/build.gradle.kts
           grep -n 'versionCode = 5' source/android/app/build.gradle.kts
@@ -90,7 +90,7 @@ jobs:
               h.update(p.read_bytes())
               h.update(b'\0')
           digest = h.hexdigest()
-          expected = '88c41c366d46eacab28ab7c5517e5d111b22e7a26673ec8ebed85538926f05cb'
+          expected = 'd614921544d7bec2bc8d7921f1258a54eeab9d023730537b79c630d2b7a52528'
           print('files:', len(files))
           print('0.5 tree SHA256:', digest)
           if digest != expected:
