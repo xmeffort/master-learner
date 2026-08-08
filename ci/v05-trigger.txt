@@ -1,1 +1,1 @@
-Master Learner 0.5 Adaptive Learning Engine + Discovery release build.
+Master Learner 0.5 release build after canonical 0.4 part 03 repair.
