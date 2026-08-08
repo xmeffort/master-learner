@@ -1,1 +1,1 @@
-Master Learner 0.5 release build with exact canonical 0.4 baseline.
+Master Learner 0.5 release build with focused compiler diagnostics.
