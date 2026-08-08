@@ -151,6 +151,20 @@ jobs:
           grep -n 'tools:replace="android:usesCleartextTraffic"' source/android/app/src/debug/AndroidManifest.xml
           grep -n 'android:usesCleartextTraffic="false"' source/android/app/src/main/AndroidManifest.xml
 
+      - name: Export compiler-migrated source
+        shell: bash
+        run: |
+          (cd source && zip -qr ../master-learner-android-migrated.zip android)
+          sha256sum master-learner-android-migrated.zip
+
+      - name: Upload migrated source
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-learner-android-migrated-source
+          path: master-learner-android-migrated.zip
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
